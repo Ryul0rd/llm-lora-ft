@@ -18,13 +18,13 @@ def main():
     config = Config(
         project_name = "llm-peft",
         model_name = "tiiuae/falcon-7b",
-        n_effective_training_iterations = 200,
+        n_training_iterations = 200,
         effective_batch_size = 2,
         learning_rate = 1e-4,
         gradient_accumulation_steps = 1,
         max_sequence_length = 512,
-        log_every_n_updates = 10,
-        validate_every_n_updates = 50,
+        log_every_n_steps = 10,
+        validate_every_n_steps = 50,
     )
 
     # data preparation
@@ -110,21 +110,21 @@ def main():
 
     for step in trange(config.n_training_iterations, desc="Training", leave=True):
         # training
-        try:
-            batch = next(iter_training_dataloader)
-        except:
-            iter_training_dataloader = iter(training_dataloader)
-            batch = next(iter_training_dataloader)
-        output = model.forward(
-            input_ids = batch["input_ids"],
-            attention_mask = batch["attention_mask"],
-            labels = batch["labels"],
-        )
-        training_loss_metric.update(output.loss)
-        accelerator.backward(output.loss / config.gradient_accumulation_steps)
-        if (step + 1) % config.gradient_accumulation_steps == 0:
-            optimizer.step()
-            optimizer.zero_grad()
+        for _ in range(config.gradient_accumulation_steps):
+            try:
+                batch = next(iter_training_dataloader)
+            except:
+                iter_training_dataloader = iter(training_dataloader)
+                batch = next(iter_training_dataloader)
+            output = model.forward(
+                input_ids = batch["input_ids"],
+                attention_mask = batch["attention_mask"],
+                labels = batch["labels"],
+            )
+            training_loss_metric.update(output.loss)
+            accelerator.backward(output.loss / config.gradient_accumulation_steps)
+        optimizer.step()
+        optimizer.zero_grad()
         if (step + 1) % config.log_every_n_steps == 0:
             accelerator.log({"training_loss": training_loss_metric.compute()}, step)
             training_loss_metric.reset()
@@ -149,26 +149,20 @@ def main():
 class Config:
     project_name: str
     model_name: str
-    n_effective_training_iterations: int
-    n_training_iterations: int = field(init=False)
+    n_training_iterations: int
     effective_batch_size: int
     batch_size: int = field(init=False)
     learning_rate: float
     gradient_accumulation_steps: int
     max_sequence_length: int
-    log_every_n_updates: int
-    log_every_n_steps: int = field(init=False)
-    validate_every_n_updates: int
-    validate_every_n_steps: int = field(init=False)
+    log_every_n_steps: int
+    validate_every_n_steps: int
 
     def __post_init__(self):
         if self.effective_batch_size % self.gradient_accumulation_steps != 0:
             raise ValueError("effective_batch_size must be evenly divisble by gradient_accumulation_steps")
         
         self.batch_size = self.effective_batch_size // self.gradient_accumulation_steps
-        self.n_training_iterations = self.n_effective_training_iterations * self.gradient_accumulation_steps
-        self.log_every_n_steps = self.log_every_n_updates * self.gradient_accumulation_steps
-        self.validate_every_n_steps = self.validate_every_n_updates * self.gradient_accumulation_steps
     
 
 if __name__ == "__main__":
